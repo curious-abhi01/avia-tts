@@ -9,10 +9,13 @@ from flask_cors import CORS
 from google.cloud import texttospeech
 from google.oauth2 import service_account
 
-app = Flask(__name__)
-CORS(app)
+# 🔐 Load API key (for protecting your endpoint)
+API_KEY = os.environ.get("MY_API_KEY")
 
-# 🔐 Load credentials securely from environment variable
+if not API_KEY:
+    raise Exception("MY_API_KEY environment variable not set")
+
+# 🔐 Load Google credentials securely
 credentials_json = os.environ.get("GOOGLE_CREDENTIALS")
 
 if not credentials_json:
@@ -25,6 +28,12 @@ credentials = service_account.Credentials.from_service_account_info(
 )
 
 client = texttospeech.TextToSpeechClient(credentials=credentials)
+
+# 🌐 Initialize app
+app = Flask(__name__)
+
+# 🔒 CORS (restrict later to your domain if needed)
+CORS(app, resources={r"/synthesize": {"origins": "*"}})
 
 
 # 🌐 Home route
@@ -43,21 +52,38 @@ def favicon():
 @app.route('/synthesize', methods=['POST'])
 def synthesize():
     try:
-        data = request.json
+        # 🔐 API Key Check
+        user_key = request.headers.get("x-api-key")
+
+        if user_key != API_KEY:
+            return jsonify({"error": "Unauthorized"}), 403
+
+        data = request.get_json()
 
         if not data or 'text' not in data:
             return jsonify({"error": "Text is required"}), 400
 
-        text = data.get('text')
+        text = data.get('text').strip()
+
+        # 🛡 Prevent abuse
+        MAX_TEXT_LENGTH = 500
+        if len(text) == 0:
+            return jsonify({"error": "Text cannot be empty"}), 400
+
+        if len(text) > MAX_TEXT_LENGTH:
+            return jsonify({"error": "Text too long (max 500 chars)"}), 400
+
         voice_name = data.get('voice', 'en-US-Chirp-HD-F')
         speed = float(data.get('speed', 1.0))
         pitch = float(data.get('pitch', 0.0))
         volume = float(data.get('volume', 0.0))
 
+        print(f"🔊 Request: {text[:60]}...")
+
         # Input text
         synthesis_input = texttospeech.SynthesisInput(text=text)
 
-        # Voice settings
+        # Voice config
         voice = texttospeech.VoiceSelectionParams(
             language_code="en-US",
             name=voice_name
@@ -78,7 +104,7 @@ def synthesize():
             audio_config=audio_config
         )
 
-        # Return audio
+        # Return audio file
         return send_file(
             io.BytesIO(response.audio_content),
             mimetype='audio/mp3',
@@ -90,6 +116,6 @@ def synthesize():
         return jsonify({"error": str(e)}), 500
 
 
-# ▶️ Run app
+# ▶️ Run app (local / Codespaces)
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
